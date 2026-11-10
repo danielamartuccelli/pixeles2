@@ -1,0 +1,218 @@
+/* ===========================================================
+   audio.js — música PROCEDURAL (WebAudio), sin archivos de audio.
+   No se usan canciones reales (derechos de autor): son composiciones
+   originales "con el aire" de cada estilo que pidieron:
+     lofi      -> tipo Luv(sic) de Nujabes (jazzy, tranquilo)
+     reggaeton -> casa de Daniela (dembow)
+     hiphop    -> casa de Sebas (boom-bap, onda Mac Miller)
+     rock      -> Parque Kennedy (pop-punk, onda Olivia Rodrigo)
+     urbano    -> El Pollo Pier (trap latino oscuro)
+     salsa     -> Academia Saoco (clave, montuno, charanga)
+     habanera / charanga -> canciones fácil / difícil del baile de Saoco
+   =========================================================== */
+(function () {
+  const G = window.G;
+  const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  const STYLES = {
+    lofi: { bpm: 76, swing: 0.16, wave: 'triangle', pad: 0.09, bassW: 'sine',
+      chords: [[57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65], [52, 55, 59, 64]], roots: [45, 41, 43, 40],
+      kick: [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1],
+      bass: [1,0,0,0, 0,0,1,0, 0,0,0,0, 1,0,0,0], melody: true, vinyl: true },
+    reggaeton: { bpm: 92, swing: 0, wave: 'square', pad: 0.035, bassW: 'sine',
+      chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], roots: [45, 41, 36, 43],
+      kick: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], snare: [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0], hat: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+      bass: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0], stab: [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0], melody: true },
+    hiphop: { bpm: 86, swing: 0.2, wave: 'triangle', pad: 0.1, bassW: 'sine',
+      chords: [[60, 63, 67, 70], [56, 60, 63, 67], [58, 62, 65, 69], [55, 58, 62, 65]], roots: [48, 44, 46, 43],
+      kick: [1,0,0,0, 0,0,0,1, 0,0,1,0, 0,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,1], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      bass: [1,0,0,0, 0,0,0,1, 0,0,1,0, 0,0,0,0], melody: true, vinyl: true },
+    rock: { bpm: 128, swing: 0, wave: 'sawtooth', pad: 0.05, bassW: 'sawtooth',
+      chords: [[48, 55, 60], [55, 62, 67], [57, 64, 69], [53, 60, 65]], roots: [36, 43, 45, 41],
+      kick: [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      bass: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0], stab: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0], lp: 1800 },
+    urbano: { bpm: 100, swing: 0, wave: 'sawtooth', pad: 0.03, bassW: 'sine',
+      chords: [[57, 60, 64], [57, 60, 64], [53, 57, 60], [55, 59, 62]], roots: [33, 33, 29, 31],
+      kick: [1,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,0,1], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [1,1,1,1, 1,0,1,1, 1,1,1,1, 1,0,1,1],
+      bass: [1,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,0,1], long808: true, lp: 1200, melody: true },
+    salsa: { bpm: 100, swing: 0, wave: 'triangle', pad: 0.05, bassW: 'sine',
+      chords: [[57, 60, 64, 67], [62, 65, 69, 72], [55, 59, 62, 65], [60, 64, 67, 71]], roots: [45, 50, 43, 48],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 1,0,0,0], conga: [0,0,0,0, 1,0,1,1, 0,0,0,0, 1,0,1,1],
+      bass: [0,0,0,0, 0,0,1,0, 0,0,0,0, 1,0,0,1], montuno: true, melody: true },
+    /* más ritmos (DJ del igloo y canciones de Saoco) */
+    salsaRomantica: { bpm: 90, swing: 0.04, wave: 'triangle', pad: 0.06, bassW: 'sine',
+      chords: [[57, 60, 64, 67], [53, 57, 60, 64], [62, 65, 69, 72], [55, 59, 62, 65]], roots: [45, 41, 50, 43],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 1,0,0,0], conga: [0,0,0,0, 1,0,1,1, 0,0,0,0, 1,0,1,1],
+      bass: [0,0,0,0, 0,0,1,0, 0,0,0,0, 1,0,0,1], montuno: true, melody: true },
+    timba: { bpm: 124, swing: 0, wave: 'square', pad: 0.035, bassW: 'sine',
+      chords: [[57, 60, 64, 67], [55, 59, 62, 65], [53, 57, 60, 64], [55, 59, 62, 65]], roots: [45, 43, 41, 43],
+      kick: [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 1,0,0,0], conga: [0,0,1,0, 1,0,1,1, 0,0,1,0, 1,0,1,1],
+      bass: [1,0,0,1, 0,0,1,0, 0,1,0,0, 1,0,0,1], montuno: true, melody: true, lp: 3200 },
+    electro: { bpm: 124, swing: 0, wave: 'sawtooth', pad: 0.03, bassW: 'sawtooth',
+      chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], roots: [33, 29, 36, 31],
+      kick: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+      bass: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,1], stab: [1,0,0,1, 0,0,1,0, 0,1,0,0, 1,0,0,1], melody: true, lp: 2400 },
+    latinpop: { bpm: 104, swing: 0, wave: 'triangle', pad: 0.06, bassW: 'sine',
+      chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], roots: [45, 41, 36, 43],
+      kick: [1,0,0,0, 0,0,0,0, 1,0,0,1, 0,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [1,0,1,1, 1,0,1,0, 1,0,1,1, 1,0,1,0],
+      clave: [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0], bass: [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0], stab: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0], melody: true },
+    /* dojo: pentatónica mayor (sonido chino/oriental), cuerdas pulsadas, tambor taiko y gong */
+    oriental: { bpm: 90, swing: 0, wave: 'triangle', pad: 0.04, bassW: 'sine', scale: [0, 2, 4, 7, 9, 12, 14, 16], pluck: [1,0,0,1, 0,0,1,0, 1,0,0,0, 1,0,1,0], gong: true,
+      chords: [[57, 64, 69], [55, 62, 67], [52, 59, 64], [55, 62, 67]], roots: [45, 43, 40, 43],
+      kick: [1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0], hat: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      clave: [0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0], bass: [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0], melody: true },
+    /* cocina de Daniela: ¡acelerada! */
+    rapido: { bpm: 152, swing: 0, wave: 'square', pad: 0.03, bassW: 'sawtooth', mel: 0.8,
+      chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], roots: [45, 41, 36, 43],
+      kick: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,1], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,1,0], hat: [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1],
+      clave: [0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0], bass: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1], stab: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0], melody: true },
+
+    /* ---- una canción distinta para cada lugar, según su mood ---- */
+    indie: { bpm: 98, swing: 0.05, wave: 'triangle', pad: 0.06, bassW: 'sine', scale: [0, 2, 4, 7, 9, 12, 14], mel: 0.7,
+      chords: [[60, 64, 67], [55, 59, 62], [57, 60, 64], [53, 57, 60]], roots: [48, 43, 45, 41],
+      kick: [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0], hat: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+      bass: [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,0,1], stab: [0,0,1,0, 0,0,0,1, 0,0,1,0, 0,0,0,0], melody: true },
+    surf: { bpm: 138, swing: 0, wave: 'sawtooth', pad: 0.03, bassW: 'sawtooth', scale: [0, 1, 4, 5, 7, 8, 11], mel: 0.9, lp: 2200,
+      chords: [[52, 55, 59], [48, 52, 55], [50, 54, 57], [47, 51, 54]], roots: [40, 36, 38, 35],
+      kick: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], snare: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,1,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      bass: [1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1], melody: true },
+    bossa: { bpm: 84, swing: 0.1, wave: 'triangle', pad: 0.07, bassW: 'sine', scale: [0, 2, 4, 7, 9, 11, 12], mel: 0.6,
+      chords: [[60, 64, 67, 71], [57, 60, 64, 67], [62, 65, 69, 72], [55, 59, 62, 65]], roots: [48, 45, 50, 43],
+      kick: [1,0,0,1, 0,0,1,0, 0,0,1,0, 0,1,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 0,1,0,0], bass: [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0], melody: true },
+    noche: { bpm: 62, swing: 0, wave: 'sine', pad: 0.11, bassW: 'sine', scale: [0, 2, 4, 7, 9, 12, 14, 16], mel: 0.4,
+      chords: [[57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65], [52, 56, 59, 64]], roots: [45, 41, 43, 40],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      bass: [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], melody: true },
+    cuento: { bpm: 78, swing: 0, wave: 'triangle', pad: 0.05, bassW: 'sine', scale: [0, 2, 4, 7, 9, 12, 14, 16], pluck: [1,0,1,0, 0,1,0,1, 1,0,0,1, 0,0,1,0],
+      chords: [[60, 64, 67], [65, 69, 72], [67, 71, 74], [60, 64, 67]], roots: [48, 53, 43, 48],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+      bass: [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0], melody: true },
+    cafe: { bpm: 108, swing: 0.3, wave: 'triangle', pad: 0.06, bassW: 'sine', scale: [0, 2, 3, 5, 7, 9, 10, 12], mel: 0.65,
+      chords: [[62, 65, 69, 72], [55, 59, 62, 65], [60, 64, 67, 71], [57, 61, 64, 67]], roots: [50, 43, 48, 45],
+      kick: [1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [1,0,0,1, 0,0,1,0, 0,1,0,0, 1,0,0,1],
+      bass: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0], melody: true },
+    /* canciones del baile de Saoco: fácil = habanera (lenta), normal = salsa, difícil = charanga (rápida) */
+    habanera: { bpm: 88, swing: 0.06, wave: 'triangle', pad: 0.05, bassW: 'sine',
+      chords: [[57, 60, 64], [53, 57, 60], [55, 59, 62], [57, 60, 64]], roots: [45, 41, 43, 45],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,0,0, 0,0,0,0], conga: [0,0,0,0, 1,0,1,0, 0,0,0,0, 1,0,1,0],
+      bass: [1,0,0,1, 1,0,0,0, 1,0,0,1, 1,0,0,0], melody: true },
+    charanga: { bpm: 116, swing: 0, wave: 'sine', pad: 0.045, bassW: 'sine',
+      chords: [[60, 64, 67, 71], [65, 69, 72, 76], [67, 71, 74, 77], [60, 64, 67, 71]], roots: [48, 53, 43, 48],
+      kick: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], hat: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0],
+      clave: [1,0,0,1, 0,0,1,0, 0,0,1,0, 1,0,0,0], conga: [0,0,1,0, 1,0,1,1, 0,0,1,0, 1,0,1,1],
+      bass: [1,0,0,0, 0,0,1,0, 0,0,0,0, 1,0,0,1], montuno: true, melody: true }
+  };
+
+  let ctx = null, master = null, bus = null, noiseBuf = null, timer = null, style = null, step = 0, nextT = 0, started = false, lastId = 0;
+
+  function init() {
+    if (ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    ctx = new AC(); master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+    bus = ctx.createGain(); bus.connect(master);   // bus de la canción actual: al cambiar de lugar se apaga el anterior (sin solapes)
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+
+  function env(g, t, a, d, peak, end) {
+    g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d);
+  }
+  function tone(t, freq, dur, type, vol, lp, a) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = type; o.frequency.value = freq; f.type = 'lowpass'; f.frequency.value = lp || 2400;
+    env(g, t, a || 0.01, dur, vol); o.connect(f); f.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + (a || 0.01) + 0.05);
+  }
+  function noise(t, dur, vol, hp, type) {
+    const s = ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    s.buffer = noiseBuf; f.type = type || 'highpass'; f.frequency.value = hp; env(g, t, 0.002, dur, vol);
+    s.connect(f); f.connect(g); g.connect(bus); s.start(t); s.stop(t + dur + 0.05);
+  }
+  function kick(t, vol) { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12); env(g, t, 0.002, 0.16, vol); o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.25); }
+  function snare(t, vol) { noise(t, 0.12, vol, 1800); tone(t, 190, 0.07, 'triangle', vol * 0.6); }
+  function sweep(t, f0, f1, dur, vol, type) { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = type || 'sine'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6); env(g, t, 0.004, dur, vol); o.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05); }
+
+  const SCALE = [0, 3, 5, 7, 10, 12, 15];   // pentatónica menor (melodía)
+
+  function playStep(S, n, t) {
+    const bar = Math.floor(n / 16) % 4, k = n % 16, ch = S.chords[bar], root = S.roots[bar];
+    const sw = (k % 2 === 1) ? S.swing * (60 / S.bpm / 4) : 0; t += sw;
+    const lp = S.lp || 2600;
+    if (k === 0 && S.pad) ch.forEach((m, i) => tone(t, mtof(m + (S.wave === 'sawtooth' && S.stab ? 0 : 0)), 60 / S.bpm * 3.6, S.wave, S.pad, lp, 0.25));
+    if (S.stab && S.stab[k]) ch.forEach(m => tone(t, mtof(m + 12), 0.14, S.wave === 'sawtooth' ? 'sawtooth' : 'square', S.wave === 'sawtooth' ? 0.05 : 0.03, lp));
+    if (S.kick[k]) kick(t, 0.55);
+    if (S.snare[k]) snare(t, 0.22);
+    if (S.hat[k]) noise(t, 0.03, 0.06, 7000);
+    if (S.clave && S.clave[k]) tone(t, 2300, 0.05, 'square', 0.05, 6000);
+    if (S.conga && S.conga[k]) sweep(t, 330, 220, 0.12, 0.2, 'sine');
+    if (S.bass[k]) {
+      if (S.long808) sweep(t, mtof(root), mtof(root) * 0.98, 0.5, 0.45, 'sine');
+      else tone(t, mtof(root), 0.28, S.bassW, S.bassW === 'sawtooth' ? 0.12 : 0.32, 700);
+    }
+    if (S.montuno && k % 2 === 0) { const m = ch[(k / 2) % ch.length] + 12; tone(t, mtof(m), 0.16, 'triangle', 0.09, 3000); }
+    if (S.gong && k === 0 && bar % 2 === 0) { tone(t, 98, 1.6, 'sine', 0.14, 900, 0.01); tone(t, 147, 1.2, 'sine', 0.06, 1200, 0.01); }
+    if (S.pluck && S.pluck[k]) { const sc = S.scale || SCALE, m = root + 36 + sc[(bar * 3 + k) % sc.length]; tone(t, mtof(m), 0.22, 'sawtooth', 0.035, 1800, 0.004); if (k % 8 === 0) tone(t, mtof(m + 12), 0.3, 'sine', 0.04, 3000, 0.004); }
+    if (S.melody && (k === 0 || k === 6 || k === 10 || k === 14) && Math.random() < (S.mel || 0.55)) {
+      const sc = S.scale || SCALE, m = root + 24 + sc[Math.floor(Math.random() * sc.length)];
+      tone(t, mtof(m), 0.35, S.wave === 'sawtooth' ? 'triangle' : 'sine', 0.07, 2200, 0.02);
+    }
+  }
+
+  function startLoop() {
+    if (timer) return;
+    nextT = ctx.currentTime + 0.1; step = 0;
+    timer = setInterval(() => {
+      if (!ctx) return;
+      const S = STYLES[style] || STYLES.lofi, dt = 60 / S.bpm / 4, on = G.state.settings.music && !!style;   // sin estilo = silencio (no hay música "de fondo" automática)
+      // pestaña en segundo plano: el navegador frena el temporizador; en vez de soltar de golpe todas las notas atrasadas (se oía "traspapelado"), se salta lo que ya pasó
+      if (nextT < ctx.currentTime - 0.1) { const n = Math.ceil((ctx.currentTime - nextT) / dt); nextT += n * dt; step += n; }
+      // el reloj avanza aunque la música esté apagada (los juegos de ritmo dependen de él); solo se oye si está encendida
+      while (nextT < ctx.currentTime + 0.25) { if (on) { try { playStep(S, step, nextT); } catch (e) { console.warn('audio', e); } } nextT += dt; step++; }
+    }, 40);
+  }
+
+  function applyVol() {
+    if (!master) return;
+    const on = G.state.settings.music, v = on ? G.state.settings.vol * 0.55 : 0;
+    master.gain.cancelScheduledValues(ctx.currentTime); master.gain.setTargetAtTime(v, ctx.currentTime, 0.15);
+  }
+
+  G.audio = {
+    /* llamar tras un click del usuario (los navegadores lo exigen) */
+    start() { init(); if (!ctx) return; if (ctx.state === 'suspended') ctx.resume(); started = true; startLoop(); applyVol(); },
+    setStyle(s) {
+      if ((s && !STYLES[s]) || s === style) return; style = s || null; step = 0;
+      if (ctx && bus) {   // corta lo que sonaba del lugar anterior (notas largas incluidas) y empieza la nueva canción limpia
+        const old = bus, t = ctx.currentTime; old.gain.cancelScheduledValues(t); old.gain.setValueAtTime(old.gain.value, t); old.gain.linearRampToValueAtTime(0, t + 0.12);
+        setTimeout(() => { try { old.disconnect(); } catch (e) { } }, 400);
+        bus = ctx.createGain(); bus.connect(master); nextT = t + 0.15;
+      }
+    },
+    refresh: applyVol,
+    /* posición actual de la música en "pasos" (semicorcheas). null si el audio no está corriendo. */
+    clock() {
+      if (!ctx || ctx.state !== 'running' || !timer) return null;
+      const S = STYLES[style] || STYLES.lofi, dt = 60 / S.bpm / 4;
+      return { step: step - (nextT - ctx.currentTime) / dt - (ctx.outputLatency || 0) / dt, dt, bpm: S.bpm };
+    },
+    bpmOf(st) { return (STYLES[st] || STYLES.lofi).bpm; },
+    get style() { return style; },
+    sfx(kind) {            // sonidos cortos de interfaz
+      if (!ctx || !G.state.settings.music) return;
+      const t = ctx.currentTime;
+      if (kind === 'click') tone(t, 660, 0.06, 'square', 0.05, 3000);
+      else if (kind === 'ok') { tone(t, 523, 0.08, 'square', 0.05, 3000); tone(t + 0.08, 784, 0.12, 'square', 0.05, 3000); }
+      else if (kind === 'coin') { tone(t, 988, 0.06, 'square', 0.05, 3000); tone(t + 0.06, 1318, 0.12, 'square', 0.05, 3000); }
+      else if (kind === 'pop') sweep(t, 400, 900, 0.1, 0.08, 'sine');
+      else if (kind === 'hit') { sweep(t, 320, 80, 0.2, 0.1, 'square'); }
+      else if (kind === 'win') { [523, 659, 784, 1046].forEach((f, i) => tone(t + i * 0.1, f, 0.16, 'triangle', 0.08)); }
+      else if (kind === 'heart') { tone(t, 784, 0.1, 'triangle', 0.08); tone(t + 0.1, 1046, 0.18, 'triangle', 0.08); }
+    }
+  };
+  G.bus.on('settings', () => G.audio.refresh());
+})();

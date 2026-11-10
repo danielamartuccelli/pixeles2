@@ -1,0 +1,375 @@
+/* ===========================================================
+   scenes/pucp.js — ETAPA 4 · PUCP (San Miguel) · "Escondidas"
+   Los DOS se esconden a la vez en el campus (Facultad de Letras y Ciencias Sociales, el Tontódromo, el pasto).
+   - Fase ESCÓNDETE (se acorta cada ronda): corre a un escondite (arbusto, árbol, columna) y pulsa E.
+     Cada escondite admite a UNA sola persona: el que llega primero se lo queda.
+   - Fase PATRULLA: un GUARDIA (cono de visión + revisa escondites: se ve un "?" antes de revisar) y un
+     ESTUDIANTE (solo mira) recorren el campus. Si te ve el cono unos instantes, o te encuentran en tu escondite, quedas VISTO.
+     Puedes cambiar de escondite en plena ronda… pero moverte en el cono es peligroso.
+   - Se elige 3, 5 o 7 rondas. Gana quien menos veces sea visto (empate = ronda extra de muerte súbita).
+   - APUNTES: en cada ronda hay 4 hojas de apuntes tiradas por el campus (misma posición para los dos, por semilla). Recógelas pasando encima:
+     desempatan la partida y son el riesgo/recompensa (salir del escondite = que te vea la patrulla).
+   Red: el anfitrión manda la semilla (p_go) y decide el marcador (p_res); cada uno juzga si LO vieron a él (p_fin).
+   Prueba solo: ?solo=1&me=sebas&go=pucp&prounds=3&pauto=1  (la pareja es un bot)
+   =========================================================== */
+(function () {
+  const G = window.G, A = G.art, W = G.W, H = G.H, Q = new URLSearchParams(location.search);
+  const PRIZE = 10, SPEED = 62, B = { x0: 14, x1: 386, y0: 106, y1: 216 };
+  /* Los escondites CAMBIAN de lugar en cada ronda (misma semilla en las dos laptops):
+     arbustos, árboles, bancas, jardineras y paneles de afiches (la PUCP no tiene columnas). */
+  let SPOTS = [];
+  const META = { bush: { name: 'arbusto', flag: 30, eye: 12 }, tree: { name: 'árbol', flag: 56, eye: 12 }, bench: { name: 'banca', flag: 30, eye: 19 }, planter: { name: 'jardinera', flag: 34, eye: 15 }, board: { name: 'panel de afiches', flag: 50, eye: 22 } };
+  function genSpots(seed, r) {
+    const R = rng(seed * 11 + r * 6007), types = ['bush', 'bush', 'tree', 'bench', 'planter', 'board', 'bush', 'tree', 'bench', 'planter'];
+    for (let i = types.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [types[i], types[j]] = [types[j], types[i]]; }
+    const out = [];
+    types.forEach(t => {
+      if (out.length >= 9) return; let x, y, ok, tries = 0;
+      do { x = 34 + R() * 332; y = (t === 'tree' || t === 'board') ? 126 + R() * 44 : 130 + R() * 78; ok = out.every(q => Math.hypot(q.x - x, (q.y - y) * 1.4) > 44) && !(Math.abs(x - 200) < 56 && Math.abs(y - 168) < 24) && !(Math.abs(x - 326) < 30 && Math.abs(y - 196) < 34); } while (!ok && ++tries < 60);
+      if (ok) out.push({ t, x, y });
+    });
+    return out;
+  }
+
+  function rng(seed) { let a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+  const diffOf = r => Math.min(1, (r - 1) / 6);
+
+  /* ---------- NPC (determinista: guardia y estudiante) ---------- */
+  class Npc {
+    constructor(kind, plan, start, speed, range, half, scale) {
+      Object.assign(this, { kind, plan, x: start.x, y: start.y, exit: { x: start.x, y: start.y }, speed, range, half, a: start.x < 0 ? 0 : Math.PI, i: -1, state: 'idle', timer: 0, flag: -1, out: false, moving: false, t: 0 });
+    }
+    next() {
+      const t = this.plan[++this.i];
+      if (!t) { this.state = 'leave'; this.target = this.exit; this.flag = -1; return; }
+      this.task = t; this.state = 'walk';
+      if (t.type === 'spot') { const s = SPOTS[t.spot]; this.target = { x: s.x, y: Math.min(B.y1, s.y + 20) }; this.flag = t.spot; } else { this.target = { x: t.x, y: t.y }; this.flag = -1; }
+    }
+    step(dt, scene) {
+      this.t += dt;
+      if (this.state === 'idle') this.next();
+      this.moving = false;
+      if (this.state === 'walk' || this.state === 'leave') {
+        const dx = this.target.x - this.x, dy = this.target.y - this.y, d = Math.hypot(dx, dy), st = this.speed * dt;
+        this.a = Math.atan2(dy, dx); this.moving = true;
+        if (d <= st) {
+          this.x = this.target.x; this.y = this.target.y;
+          if (this.state === 'leave') { this.out = true; return; }
+          if (this.task.type === 'spot') { this.state = 'peek'; this.timer = 0.9; this.a = -Math.PI / 2; scene.onPeek(this, this.task.spot); }
+          else { this.state = 'scan'; this.timer = this.task.scan; this.base = this.a; this.moving = false; }
+        } else { this.x += dx / d * st; this.y += dy / d * st; }
+      } else if (this.state === 'scan') {
+        this.timer -= dt; this.a = this.base + Math.sin((this.task.scan - this.timer) * 3.2) * 0.95; if (this.timer <= 0) this.next();
+      } else if (this.state === 'peek') { this.timer -= dt; if (this.timer <= 0) this.next(); }
+    }
+  }
+  function makePlans(seed, r) {
+    const R = rng(seed + r * 7919), d = r > 7 ? 1 : diffOf(r), pts = () => ({ x: 40 + R() * 320, y: 122 + R() * 88 });
+    const n = 3 + (r >= 4 ? 1 : 0) + (r >= 6 ? 1 : 0), plan = [], forced = r >= 3 || R() < 0.5 ? Math.floor(R() * n) : -1; let nSpots = 0; const maxSpots = r <= 3 ? 1 : 2;
+    for (let i = 0; i < n; i++) {
+      if (nSpots < maxSpots && (i === forced || R() < 0.22)) { nSpots++; let s; do { s = Math.floor(R() * SPOTS.length); } while (plan.some(p => p.spot === s)); plan.push({ type: 'spot', spot: s }); }
+      else plan.push(Object.assign(pts(), { type: 'pt', scan: 1.1 + d * 0.5 }));
+    }
+    const left = R() < 0.5, sx = left ? -12 : W + 12, studentPlan = [0, 1, 2, 3].map(() => Object.assign(pts(), { type: 'pt', scan: 0.7 }));
+    const npcs = [new Npc('guard', plan, { x: sx, y: 150 + R() * 40 }, 38 + 20 * d, 94 + 22 * d, 0.46 + 0.1 * d)];
+    npcs.push(new Npc('student', studentPlan, { x: left ? W + 12 : -12, y: 130 + R() * 60 }, 34, 84, 0.45));
+    if (r >= 5) npcs.push(new Npc('student', studentPlan.slice().reverse(), { x: left ? W + 12 : -12, y: 190 }, 38, 84, 0.45));
+    return npcs;
+  }
+
+  /* ================= ESCENA ================= */
+  class PucpScene extends Phaser.Scene {
+    constructor() { super('pucp'); }
+    create() {
+      A.emoteTextures(this.game); G.refreshTextures(); this.makeNpcTextures();
+      this.phase = 'lobby'; this.rounds = +Q.get('prounds') || 5; this.ready = { me: false, partner: false }; this.ui = []; this.r = 0; this.scores = { dani: 0, sebas: 0 };
+      this.npcs = []; this.acc = 0; this.seed = 0; this.fin = {}; this.over = false; this.tn = { dani: 0, sebas: 0 }; this.myN = 0; this.botN = 0; this.noteObjs = [];
+      this.keys = this.input.keyboard.addKeys({ up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT', w: 'W', a: 'A', s: 'S', d: 'D' }, false);
+      this.input.keyboard.on('keydown-E', () => this.toggleHide()); this.input.keyboard.on('keydown-SPACE', () => this.toggleHide());
+      const mkAct = (who, x, y) => { const p = G.state[who === 'me' ? 'me' : 'partner'], a = { who, x, y, dir: 'd', moving: false, t: 0, hid: -1, seen: false, meter: 0, tx: x, ty: y };
+        a.shadow = this.add.ellipse(x, y, 14, 5, 0x000000, 0.25); a.spr = this.add.sprite(x, y, 'char_' + who, 'd0').setOrigin(0.5, 1);
+        a.label = this.add.text(x, y - 30, p.name || '', { fontFamily: 'VT323', fontSize: '12px', color: '#ffffff', stroke: '#2b1b30', strokeThickness: 3 }).setOrigin(0.5, 1);
+        a.bar = this.add.graphics(); a.mark = this.add.text(x, y - 40, '', { fontFamily: 'VT323', fontSize: '22px', color: '#ff3b3b', stroke: '#ffffff', strokeThickness: 3 }).setOrigin(0.5, 1); return a; };
+      this.drawCampus(); this.newSpots(0); this.makeSquirrel();
+      this.me = mkAct('me', 180, 205); this.pa = mkAct('partner', 220, 205);
+      this.coneG = this.add.graphics().setDepth(3500); this.flagTxt = A.text(this, 0, 0, '?', 16, '#ff3b3b').setDepth(3600).setVisible(false);
+      this.eyes = [this.add.graphics().setDepth(900), this.add.graphics().setDepth(900)];
+      this.noteHud = this.add.text(8, 118, '', { fontFamily: 'VT323', fontSize: '12px', color: '#2b1b30', backgroundColor: '#fff3d6', padding: { x: 3, y: 0 } }).setDepth(5000); this.banner = A.text(this, 200, 52, '', 13, '#ffffff').setDepth(5000); this.sub = A.text(this, 200, 66, '', 11, '#ffd24a').setDepth(5000);
+      this.nets = [['p_cfg', d => { this.rounds = d.rounds; this.drawLobby(); }], ['p_ready', d => { this.ready.partner = !!d.r; this.drawLobby(); this.tryStart(); }],
+        ['p_go', d => { if (this.phase === 'lobby') this.beginMatch(d.seed, d.rounds); }], ['p_pos', d => this.onPos(d)], ['p_seen', d => { this.pa.seen = true; this.pa.seenT = d && d.t; this.pa.mark.setText('!'); if (this.endAt === undefined) this.endAt = this.pT + 1.4; }],
+        ['p_fin', d => { this.fin.partner = d.seen; this.fin.pn = d.n || 0; this.fin.pt = d.t; this.hostResolve(); }], ['p_res', d => this.applyRes(d)], ['p_next', d => this.startRound(d.r)], ['p_over', d => this.showOver(d)], ['p_again', () => this.scene.restart()]];
+      const net = G.net; this.nets.forEach(([t, f]) => (net.handlers[t] = net.handlers[t] || []).push(f));
+      this.events.once('shutdown', () => this.nets.forEach(([t, f]) => { net.handlers[t] = (net.handlers[t] || []).filter(x => x !== f); }));
+      this.drawLobby(); if (G.net.role === 'host' || G.solo) this.send('p_cfg', { rounds: this.rounds });
+      this.time.addEvent({ delay: 1200, loop: true, callback: () => { if (this.phase === 'lobby') { if (G.net.role === 'host' || G.solo) this.send('p_cfg', { rounds: this.rounds }); this.send('p_ready', { r: this.ready.me }); } } });
+      if (G.solo && Q.get('pauto') === '1') this.time.delayedCall(600, () => { this.ready.me = true; this.tryStart(); });
+      if (G.isNight()) this.add.rectangle(W / 2, H / 2, W, H, 0x1a1a6a, 0.22).setDepth(8000);
+    }
+    send(t, d) { if (G.net.connected) G.net.send(t, d); }
+    makeNpcTextures() {
+      const ad = { textures: this.textures };
+      const g = G.defaultLook('sebas'); g.hair = { style: 'muyCorto', color: '#1b1618' }; g.glasses = { type: 'none' };
+      g.outfit = { top: { style: 'shirt', color: '#2c3e6a' }, bottom: { style: 'pants', color: '#1b1f2e' }, shoes: { type: 'formal', color: '#1b1b1f' } }; g.acc = { hat: 'cap', hatColor: '#2c3e6a', scarf: 'none', backpack: false };
+      G.makeCharTexture(ad, 'npc_guard', g);
+      const s = G.defaultLook('dani'); s.hair = { style: 'bob', color: '#d4a04a' }; s.earrings = 'none';
+      s.outfit = { top: { style: 'tee', color: '#7fd1ae' }, bottom: { style: 'pants', color: '#3d4a63' }, shoes: { type: 'sneaker', color: '#fffaf0' } }; s.acc = { hat: 'none', scarf: 'none', backpack: true, backpackColor: '#ff7aa8' };
+      G.makeCharTexture(ad, 'npc_student', s);
+    }
+
+    /* una ardillita pasea por el campus (adorno: no te ve ni te ayuda) */
+    makeSquirrel() {
+      const c = this.add.container(60, 190).setDepth(190), g = this.add.graphics(); c.add(g);
+      g.fillStyle(0x000000, 0.2).fillEllipse(0, 1, 11, 3);
+      g.fillStyle(0xc9803a).fillEllipse(-6, -10, 6, 13).fillStyle(0xe6a65a).fillEllipse(-7, -12, 3, 8).fillStyle(0xfff0d0).fillRect(-8, -16, 3, 2);   // cola esponjosa
+      g.fillStyle(0x9a5a2a).fillEllipse(0, -4, 9, 7).fillStyle(0xf4e3c0).fillEllipse(2, -3, 4, 4);                                                    // cuerpo y pancita
+      g.fillStyle(0x9a5a2a).fillCircle(5, -8, 3.4).fillTriangle(4, -11, 6, -11, 5, -14).fillStyle(0x2b1b30).fillRect(6, -9, 1, 1).fillRect(8, -8, 1, 1);
+      this.sqHop = this.tweens.add({ targets: g, y: -2, duration: 110, yoyo: true, repeat: -1, paused: true });
+      const go = () => {
+        if (!this.sys || !this.sys.isActive()) return;
+        const x = 20 + Math.random() * 360, y = 122 + Math.random() * 90, d = Math.hypot(x - c.x, y - c.y); g.scaleX = x < c.x ? -1 : 1; this.sqHop.resume();
+        this.tweens.add({ targets: c, x, y, duration: d * 16, onUpdate: () => c.setDepth(c.y), onComplete: () => { this.sqHop.pause(); g.y = 0; this.time.delayedCall(700 + Math.random() * 1800, go); } });
+      };
+      go();
+    }
+
+    /* ---------- campus ---------- */
+    drawCampus() {
+      const g = this.add.graphics().setDepth(0), night = G.isNight();
+      g.fillStyle(0x7fcf6a).fillRect(0, 96, W, 130);
+      for (let i = 0; i < 90; i++) { const x = (i * 47) % 400, y = 100 + (i * 29) % 120; g.fillStyle(i % 3 ? 0x6fbf5a : 0x93dc7c).fillRect(x, y, 2, 3); if (i % 9 === 0) g.fillStyle(i % 2 ? 0xffe066 : 0xff9fd0).fillRect(x + 3, y + 2, 2, 2); }
+      // fachada: Facultad de Letras y Ciencias Sociales
+      g.fillStyle(0xb5502a).fillRect(0, 0, W, 98); g.fillStyle(0x8a3a1c).fillRect(0, 0, W, 8).fillRect(0, 92, W, 6);
+      g.lineStyle(1, 0x9a4222); for (let y = 12; y < 92; y += 6) g.lineBetween(0, y, W, y);
+      for (let x = 12; x < 388; x += 36) { if (x > 160 && x < 240) continue; for (let k = 0; k < 2; k++) { g.fillStyle(0x2b1b30).fillRect(x - 1, 20 + k * 34 - 1, 16, 22); g.fillStyle(night ? 0xffd27a : 0x9fd8ff).fillRect(x, 20 + k * 34, 14, 20); g.fillStyle(0xffffff, 0.4).fillRect(x, 20 + k * 34, 14, 3); } }
+      g.fillStyle(0xe8d7b0).fillRect(150, 36, 100, 56).fillStyle(0x2b1b30).fillRect(184, 54, 32, 38).fillStyle(0x6b4a3a).fillRect(186, 56, 13, 36).fillRect(201, 56, 13, 36);
+      g.fillStyle(0xfff3d6).fillRoundedRect(112, 10, 176, 22, 3).lineStyle(2, 0x2b1b30).strokeRoundedRect(112, 10, 176, 22, 3);
+      this.add.text(200, 15, 'FACULTAD DE LETRAS', { fontFamily: 'VT323', fontSize: '12px', color: '#2b1b30' }).setOrigin(0.5, 0).setDepth(1);
+      this.add.text(200, 24, 'Y CIENCIAS SOCIALES', { fontFamily: 'VT323', fontSize: '9px', color: '#6a3a1c' }).setOrigin(0.5, 0).setDepth(1);
+      g.fillStyle(0xe8d7b0).fillRect(0, 98, W, 16).fillStyle(0xcdb98a).fillRect(0, 112, W, 2);       // pórtico
+      // Tontódromo
+      g.fillStyle(0xcdb98a).fillEllipse(200, 168, 92, 50).fillStyle(0xe8dcb8).fillEllipse(200, 168, 84, 44).lineStyle(1, 0xb09a74).strokeEllipse(200, 168, 60, 30).strokeEllipse(200, 168, 30, 14);
+      [[160, 150], [240, 150], [158, 186], [242, 186]].forEach(([x, y]) => { g.fillStyle(0x6b4a3a).fillRect(x - 8, y, 16, 4).fillStyle(0x2b1b30).fillRect(x - 7, y + 4, 2, 3).fillRect(x + 5, y + 4, 2, 3); });
+      this.add.text(200, 168, 'TONTÓDROMO', { fontFamily: 'VT323', fontSize: '11px', color: '#8a6a30' }).setOrigin(0.5).setDepth(1);
+      this.add.text(36, 176, 'el pasto', { fontFamily: 'VT323', fontSize: '10px', color: '#2f7a46' }).setOrigin(0.5).setDepth(1).setAlpha(0.8);
+      this.add.text(364, 188, 'el pasto', { fontFamily: 'VT323', fontSize: '10px', color: '#2f7a46' }).setOrigin(0.5).setDepth(1).setAlpha(0.8);
+      this.add.text(200, 100, G.PLACES.pucp.name + ' · ' + G.PLACES.pucp.district, { fontFamily: 'VT323', fontSize: '11px', color: '#6a3a1c' }).setOrigin(0.5, 0).setDepth(1).setAlpha(0.9);
+      // la cruz del campus: "Lux in tenebris"
+      { const cx = 326, cy = 196; g.fillStyle(0x000000, 0.18).fillEllipse(cx, cy + 2, 28, 7); g.fillStyle(0xcdb98a).fillRect(cx - 11, cy - 4, 22, 6).fillStyle(0xb09a74).fillRect(cx - 11, cy + 1, 22, 1);
+        g.fillStyle(0xe6dfce).fillRect(cx - 3, cy - 38, 6, 35).fillRect(cx - 12, cy - 30, 24, 6); g.fillStyle(0xaaa18c).fillRect(cx + 1, cy - 38, 2, 35).fillRect(cx + 1, cy - 30, 11, 6);
+        this.add.text(cx, cy + 6, 'LUX IN TENEBRIS', { fontFamily: 'VT323', fontSize: '9px', color: '#6a5a3a' }).setOrigin(0.5, 0).setDepth(1); }
+      // edificio rosado con rampa (lado izquierdo)
+      g.fillStyle(0xc98a7a).fillRect(0, 100, 30, 14).fillStyle(0xa86c5c).fillRect(0, 100, 30, 3); g.fillStyle(0xcdb98a).fillTriangle(30, 114, 62, 114, 30, 100).lineStyle(1, 0x6b4a3a).lineBetween(30, 100, 62, 114);
+    }
+    /* dibuja (o redibuja) los escondites de la ronda r */
+    newSpots(r) {
+      (this.spotObjs || []).forEach(o => o.destroy()); this.spotObjs = []; SPOTS = genSpots(this.seed || 1, r);
+      SPOTS.forEach((sp, i) => this.drawSpot(sp, i));
+    }
+    drawSpot(s, i) {
+      const g = this.add.graphics().setDepth(s.y + 6); this.spotObjs.push(g);
+      if (s.t === 'bush') { g.fillStyle(0x000000, 0.2).fillEllipse(s.x, s.y + 2, 34, 8); g.fillStyle(0x2f7a46).fillCircle(s.x - 9, s.y - 8, 9).fillCircle(s.x + 9, s.y - 8, 9).fillCircle(s.x, s.y - 14, 11); g.fillStyle(0x3aa05a).fillCircle(s.x - 6, s.y - 11, 7).fillCircle(s.x + 8, s.y - 10, 6).fillStyle(0x6fd18a, 0.8).fillRect(s.x - 8, s.y - 16, 2, 2).fillRect(s.x + 5, s.y - 12, 2, 2).fillStyle(0xff7aa8).fillRect(s.x - 2, s.y - 7, 2, 2); }
+      else if (s.t === 'tree') { g.fillStyle(0x000000, 0.2).fillEllipse(s.x, s.y + 2, 30, 8); g.fillStyle(0x6b4a3a).fillRect(s.x - 4, s.y - 22, 8, 24); g.fillStyle(0x2f7a46).fillCircle(s.x, s.y - 34, 18).fillCircle(s.x - 13, s.y - 26, 11).fillCircle(s.x + 13, s.y - 26, 11); g.fillStyle(0x3aa05a).fillCircle(s.x - 5, s.y - 38, 11).fillStyle(0x6fd18a, 0.7).fillCircle(s.x - 8, s.y - 42, 4); }
+      else if (s.t === 'bench') { g.fillStyle(0x000000, 0.2).fillEllipse(s.x, s.y + 2, 36, 7); g.fillStyle(0x4a3228).fillRect(s.x - 15, s.y - 6, 3, 8).fillRect(s.x + 12, s.y - 6, 3, 8); g.fillStyle(0x9a6a3a).fillRect(s.x - 17, s.y - 9, 34, 4).fillStyle(0xb98348).fillRect(s.x - 17, s.y - 9, 34, 1); g.fillStyle(0x8a5a2e).fillRect(s.x - 17, s.y - 19, 34, 3).fillRect(s.x - 17, s.y - 14, 34, 3).fillRect(s.x - 15, s.y - 19, 2, 12).fillRect(s.x + 13, s.y - 19, 2, 12); }
+      else if (s.t === 'planter') { g.fillStyle(0x000000, 0.2).fillEllipse(s.x, s.y + 2, 34, 7); g.fillStyle(0xb5502a).fillRect(s.x - 15, s.y - 9, 30, 11).fillStyle(0x8a3a1c).fillRect(s.x - 15, s.y - 9, 30, 2).fillRect(s.x - 15, s.y, 30, 2); g.fillStyle(0x2f7a46).fillCircle(s.x - 8, s.y - 14, 7).fillCircle(s.x + 3, s.y - 16, 8).fillCircle(s.x + 11, s.y - 13, 6); g.fillStyle(0xff7aa8).fillRect(s.x - 8, s.y - 17, 2, 2).fillRect(s.x + 5, s.y - 20, 2, 2).fillStyle(0xffe066).fillRect(s.x + 11, s.y - 16, 2, 2); }
+      else { g.fillStyle(0x000000, 0.18).fillEllipse(s.x, s.y + 2, 30, 6); g.fillStyle(0x6b4a3a).fillRect(s.x - 13, s.y - 6, 3, 8).fillRect(s.x + 10, s.y - 6, 3, 8); g.fillStyle(0xb98348).fillRect(s.x - 15, s.y - 28, 30, 22).fillStyle(0xe8d7b0).fillRect(s.x - 13, s.y - 26, 26, 18); [[-11, -24, 0xff7aa8], [-1, -24, 0x7fd1ae], [-8, -15, 0xffd24a], [3, -16, 0x9fd8ff]].forEach(([dx, dy, c]) => g.fillStyle(c).fillRect(s.x + dx, s.y + dy, 8, 7)); g.fillStyle(0x2b1b30).fillRect(s.x - 10, s.y - 22, 4, 1).fillRect(s.x, s.y - 22, 5, 1).fillRect(s.x - 7, s.y - 13, 4, 1); }
+    }
+    spotFree(i, who) { const o = who === 'me' ? this.pa : this.me; return o.hid !== i; }
+
+    /* ---------- lobby ---------- */
+    drawLobby() {
+      this.ui.forEach(o => o.destroy()); this.ui = []; if (this.phase !== 'lobby') return;
+      const add = o => { this.ui.push(o); return o; }, D = 9000, pg = add(this.add.graphics().setDepth(D));
+      pg.fillStyle(0x2b1b30, 1).fillRoundedRect(30, 36, 340, 172, 8).lineStyle(2, 0xffd24a).strokeRoundedRect(30, 36, 340, 172, 8);
+      add(A.text(this, 200, 48, '🙈 ESCONDIDAS EN LA PUCP', 14, '#ffd24a').setDepth(D + 1));
+      add(this.add.text(200, 57, '👀 ' + G.mg.nameOf('sebas') + ' es JP, y por eso no pueden verlo con una jovencita como ' + G.mg.nameOf('dani') + '. ¡Escóndanse bien!', { fontFamily: 'VT323', fontSize: '11px', color: '#ffd24a', align: 'center', wordWrap: { width: 326 } }).setOrigin(0.5, 0).setDepth(D + 1));
+      add(this.add.text(200, 84, '1) Corre a un escondite (arbusto, árbol, banca…) y pulsa E. ¡Cambian cada ronda!\n2) Llega el guardia: si te ve, pierdes. Pierde quien sea visto PRIMERO.\n3) Si nadie cae, suman los dos. 📄 Los apuntes del pasto desempatan.\nFlechas/WASD mover · E o Espacio esconderse · Esc salir', { fontFamily: 'VT323', fontSize: '11px', color: '#fff3d6', align: 'center', lineSpacing: 0, wordWrap: { width: 330 } }).setOrigin(0.5, 0).setDepth(D + 1));
+      add(this.add.text(200, 146, 'Cantidad de rondas:', { fontFamily: 'VT323', fontSize: '12px', color: '#ffffff' }).setOrigin(0.5, 0).setDepth(D + 1));
+      [3, 5, 7].forEach((n, i) => this.btn(add, 140 + i * 60, 166, 50, 16, n + ' rondas', this.rounds === n ? 0xffd24a : 0xbfeaff, () => { this.rounds = n; this.send('p_cfg', { rounds: n }); this.drawLobby(); }, D, 12));
+      const nm = G.state.me.name || 'Tú', pn = G.state.partner.name || 'Pareja';
+      this.btn(add, 84, 193, 100, 16, this.ready.me ? '✔ ¡Listo!' : '¡Estoy listo!', this.ready.me ? 0x7fd1ae : 0xff7aa8, () => { this.ready.me = !this.ready.me; this.send('p_ready', { r: this.ready.me }); this.drawLobby(); this.tryStart(); }, D);
+      add(this.add.text(140, 184, (G.solo ? pn + ' (bot) 🤖: listo' : pn + (this.ready.partner ? ': ✔ listo' : ': esperando…')) + '\n' + nm + (this.ready.me ? ': ✔ listo' : ''), { fontFamily: 'VT323', fontSize: '12px', color: '#fff3d6', lineSpacing: -1 }).setOrigin(0, 0).setDepth(D + 1));
+      this.btn(add, 332, 193, 56, 16, '◀ Igloo', 0xffffff, () => G.flow.home(), D, 12);
+    }
+    btn(add, x, y, w, h, label, color, fn, depth, fs) {
+      const g = add(this.add.graphics().setDepth(depth + 1)); g.fillStyle(0x2b1b30).fillRoundedRect(x - w / 2 + 1, y - h / 2 + 3, w, h, 4).fillStyle(color).fillRoundedRect(x - w / 2, y - h / 2, w, h, 4).lineStyle(1.5, 0x2b1b30).strokeRoundedRect(x - w / 2, y - h / 2, w, h, 4);
+      add(this.add.text(x, y, label, { fontFamily: 'VT323', fontSize: (fs || 14) + 'px', color: '#2b1b30' }).setOrigin(0.5).setDepth(depth + 2));
+      add(this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true }).setDepth(depth + 3).on('pointerdown', () => { G.audio.sfx('click'); fn(); }));
+    }
+    tryStart() {
+      if (this.phase !== 'lobby' || !this.ready.me) return;
+      if (G.solo) { this.beginMatch(Math.floor(Math.random() * 2 ** 31), this.rounds); return; }
+      if (this.ready.partner && G.net.role === 'host') { const seed = Math.floor(Math.random() * 2 ** 31); this.send('p_go', { seed, rounds: this.rounds }); this.beginMatch(seed, this.rounds); }
+    }
+
+    /* ---------- partida y rondas ---------- */
+    beginMatch(seed, rounds) { this.seed = seed; this.rounds = rounds; this.ui.forEach(o => o.destroy()); this.ui = []; this.scores = { dani: 0, sebas: 0 }; this.tn = { dani: 0, sebas: 0 }; this.botN = 0; this.over = false; this.startRound(1); }
+    startRound(r) {
+      if (this.phase === 'over') return;
+      this.r = r; this.phase = 'hide'; this.fin = {}; this.resolved = false; this.npcs = []; this.acc = 0; this.pT = 0; this.endAt = undefined; this.newSpots(r);
+      this.hideT = Math.max(6, 10 - r * 0.4); this.makeNotes(r); this.myN = 0; this.bot = G.solo ? { spot: -1, wait: 0.6 + Math.random() * 1.2, moved: false } : null;
+      [[this.me, 180], [this.pa, 220]].forEach(([a, x]) => { Object.assign(a, { x, y: 205, tx: x, ty: 205, hid: -1, seen: false, seenT: undefined, meter: 0, dir: 'u', moving: false }); a.spr.setAlpha(1); a.mark.setText(''); });
+      this.setBanner('RONDA ' + r + (r > this.rounds ? ' · ¡MUERTE SÚBITA!' : '/' + this.rounds) + (r > 1 ? ' · ¡el campus cambió!' : ''), '¡Escóndete! Corre a un arbusto, árbol, banca, jardinera o panel y pulsa E');
+      G.audio.sfx('ok');
+    }
+    makeNotes(r) {
+      (this.noteObjs || []).forEach(o => o.g.destroy()); this.noteObjs = []; const R = rng(this.seed * 3 + r * 104729);
+      for (let i = 0; i < 4; i++) {
+        let x, y, ok, tries = 0; do { x = 30 + R() * 340; y = 124 + R() * 88; ok = SPOTS.every(s => Math.hypot(x - s.x, y - s.y) > 22) && Math.hypot(x - 200, y - 205) > 20; } while (!ok && ++tries < 30);
+        const g = this.add.graphics().setDepth(y); g.fillStyle(0xfff3a0, 0.4).fillCircle(x, y - 3, 9).fillStyle(0xfff3a0, 0.25).fillCircle(x, y - 3, 13); g.fillStyle(0x000000, 0.2).fillEllipse(x, y + 1, 9, 3); g.fillStyle(0xffffff).fillRect(x - 4, y - 7, 8, 8).lineStyle(1, 0x2b1b30).strokeRect(x - 4, y - 7, 8, 8).fillStyle(0x7a8fd8).fillRect(x - 2, y - 5, 4, 1).fillRect(x - 2, y - 3, 4, 1).fillStyle(0xff5d97).fillRect(x - 2, y - 1, 2, 1);
+        this.noteObjs.push({ x, y, g, got: false, bob: i }); this.tweens.add({ targets: g, alpha: { from: 1, to: 0.6 }, duration: 450, yoyo: true, repeat: -1 });
+      }
+    }
+    pickNotes() {
+      const a = this.me; if (a.hid >= 0 || a.seen) return;
+      (this.noteObjs || []).forEach(n => { if (!n.got && Math.hypot(a.x - n.x, a.y - n.y) < 9) { n.got = true; n.g.setVisible(false); this.myN++; G.audio.sfx('coin'); } });
+      if (this.bot && !this.pa.seen && this.pa.hid < 0) (this.noteObjs || []).forEach(n => { if (!n.got && Math.hypot(this.pa.x - n.x, this.pa.y - n.y) < 9) { this.botN = (this.botN || 0) + 1; } });
+    }
+    setBanner(t, s) { this.banner.setText(t); this.sub.setText(s || ''); }
+    toggleHide() {
+      if (G.typing || G.modalOpen || (this.phase !== 'hide' && this.phase !== 'patrol') || this.me.seen) return;
+      const a = this.me;
+      if (a.hid >= 0) { a.hid = -1; a.spr.setAlpha(1); return; }
+      let best = -1, bd = 26; SPOTS.forEach((s, i) => { const d = Math.hypot(a.x - s.x, a.y - (s.y + 4)); if (d < bd && this.spotFree(i, 'me')) { best = i; bd = d; } });
+      if (best >= 0) { a.hid = best; a.x = SPOTS[best].x; a.y = SPOTS[best].y + 4; a.spr.setAlpha(0); G.audio.sfx('pop'); this.sendPos(true); }
+      else G.ui.toast('Acércate a un escondite libre');
+    }
+    onPos(d) { const a = this.pa; a.tx = d.x; a.ty = d.y; a.dir = d.d; a.moving = d.m; a.hid = d.h; a.meter = d.mt || 0; if (d.h >= 0 && d.h === this.me.hid && G.net.role === 'guest') { this.me.hid = -1; this.me.spr.setAlpha(1); G.ui.toast('¡Ese escondite ya estaba ocupado!'); } }
+    sendPos(force) { if (!G.net.connected) return; const a = this.me, k = [Math.round(a.x), Math.round(a.y), a.dir, a.moving, a.hid].join(); if (k === this.lastK && !force) return; this.lastK = k; G.net.send('p_pos', { x: Math.round(a.x), y: Math.round(a.y), d: a.dir, m: a.moving, h: a.hid, mt: a.meter }); }
+
+    /* el guardia llega a un escondite y lo revisa */
+    onPeek(npc, spot) {
+      [this.me, this.pa].forEach(a => { if (a.hid === spot && !a.seen) this.found(a); });
+    }
+    found(a) {
+      a.seen = true; a.seenT = this.pT; a.hid = -1; a.spr.setAlpha(1); a.mark.setText('!'); G.audio.sfx('hit'); if (this.endAt === undefined) this.endAt = this.pT + 1.4;
+      if (a === this.me) { this.cameras.main.shake(200, 0.008); this.send('p_seen', { t: this.pT }); this.setBanner('¡TE ENCONTRARON! 🙈', 'Si tu pareja no cae antes que tú… ¡pierdes la ronda!'); }
+    }
+    detect(a, dt) {
+      if (a.hid >= 0 || a.seen) { a.meter = Math.max(0, a.meter - dt * 2); return; }
+      let inC = false;
+      this.npcs.forEach(n => { if (n.out) return; const dx = a.x - n.x, dy = (a.y - 10) - n.y, d = Math.hypot(dx, dy); if (d < n.range && Math.abs(angDiff(Math.atan2(dy, dx), n.a)) < n.half) inC = true; });
+      a.meter = inC ? a.meter + dt / 0.9 : Math.max(0, a.meter - dt * 1.6);
+      if (a.meter >= 1) this.found(a);
+    }
+
+    update(time, dtMs) {
+      const dt = Math.min(0.05, dtMs / 1000);
+      if (['hide', 'patrol', 'between'].includes(this.phase)) { this.moveMe(dt); if (this.phase !== 'between') this.pickNotes(); }
+      this.movePartner(dt);
+      if (this.phase === 'hide') {
+        this.hideT -= dt; if (this.bot) this.simBot(dt);
+        this.sub.setText('¡Escóndete! ' + Math.ceil(Math.max(0, this.hideT)) + ' s' + (this.me.hid >= 0 ? ' — ya estás escondido ✔' : ''));
+        if (this.hideT <= 0) { this.phase = 'patrol'; this.npcs = makePlans(this.seed, this.r); this.setBanner('RONDA ' + this.r + ' · ¡Llega la patrulla!', 'El guardia revisa escondites: mira el "?"'); G.audio.sfx('pop'); }
+      } else if (this.phase === 'patrol') {
+        this.pT += dt; this.acc += dt; while (this.acc >= 1 / 30) { this.acc -= 1 / 30; this.npcs.forEach(n => { if (!n.out) n.step(1 / 30, this); }); }
+        if (this.bot) this.simBot(dt);
+        this.detect(this.me, dt); if (this.bot) this.detect(this.pa, dt);
+        if (!this.me.seen) this.sub.setText('Quédate escondido… o muévete con cuidado');
+        if (this.npcs.every(n => n.out) || this.pT > 45 || (this.endAt !== undefined && this.pT >= this.endAt)) this.endPatrol();
+      }
+      this.sendT = (this.sendT || 0) + dt; if (this.sendT > 0.08) { this.sendT = 0; this.sendPos(); }
+      this.render(time);
+    }
+    moveMe(dt) {
+      const a = this.me, K = this.keys; let vx = 0, vy = 0;
+      if (!G.typing && !G.modalOpen && a.hid < 0 && !(a.seen && this.phase !== 'between')) { if (K.left.isDown || K.a.isDown) vx--; if (K.right.isDown || K.d.isDown) vx++; if (K.up.isDown || K.w.isDown) vy--; if (K.down.isDown || K.s.isDown) vy++; }
+      if (a.seen && this.phase !== 'between') { vx = vy = 0; }
+      a.moving = !!(vx || vy);
+      if (a.moving) { const l = Math.hypot(vx, vy); a.x = Phaser.Math.Clamp(a.x + vx / l * SPEED * dt, B.x0, B.x1); a.y = Phaser.Math.Clamp(a.y + vy / l * SPEED * dt, B.y0, B.y1); a.dir = Math.abs(vx) >= Math.abs(vy) && vx ? (vx < 0 ? 'l' : 'r') : (vy < 0 ? 'u' : 'd'); a.t += dt * 1000; }
+    }
+    movePartner(dt) {
+      const a = this.pa; if (this.bot) { a.t += a.moving ? dt * 1000 : 0; return; }
+      a.x += (a.tx - a.x) * 0.25; a.y += (a.ty - a.y) * 0.25; a.t += a.moving ? dt * 1000 : 0; a.spr.setAlpha(a.hid >= 0 ? 0 : 1);
+    }
+    simBot(dt) {                                  // pareja simulada (solo en modo prueba)
+      const b = this.bot, a = this.pa; if (a.seen) { a.moving = false; return; }
+      if (b.wait > 0) { b.wait -= dt; return; }
+      const goTo = (x, y) => { const dx = x - a.x, dy = y - a.y, d = Math.hypot(dx, dy); if (d < 3) { a.moving = false; return true; } a.x += dx / d * 60 * dt; a.y += dy / d * 60 * dt; a.moving = true; a.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'l' : 'r') : (dy < 0 ? 'u' : 'd'); return false; };
+      if (a.hid < 0) {
+        if (b.spot < 0 || !this.spotFree(b.spot, 'partner')) { const free = SPOTS.map((s, i) => i).filter(i => this.spotFree(i, 'partner')); b.spot = free[Math.floor(Math.random() * free.length)]; }
+        if (goTo(SPOTS[b.spot].x, SPOTS[b.spot].y + 4)) { a.hid = b.spot; a.spr.setAlpha(0); }
+      } else if (this.phase === 'patrol') {
+        const g = this.npcs[0]; if (g && g.flag === a.hid && !b.moved && Math.hypot(g.x - a.x, g.y - a.y) < 90 && Math.random() < 0.02) { b.moved = true; a.hid = -1; a.spr.setAlpha(1); const free = SPOTS.map((s, i) => i).filter(i => i !== b.spot && this.spotFree(i, 'partner')); b.spot = free[Math.floor(Math.random() * free.length)]; }
+      }
+    }
+
+    endPatrol() {
+      if (this.phase !== 'patrol') return; this.phase = 'between'; this.npcs.forEach(n => { n.out = true; });
+      this.setBanner('Fin de la patrulla', 'Contando…');
+      const seen = this.me.seen; this.fin.me = seen; this.fin.mt = this.me.seenT; this.fin.mn = this.myN || 0; this.send('p_fin', { seen, n: this.myN || 0, t: this.me.seenT });
+      if (G.solo) { this.fin.partner = this.pa.seen; this.fin.pt = this.pa.seenT; this.fin.pn = this.botN || 0; this.botN = 0; this.hostResolve(); }
+      else this.time.delayedCall(3000, () => this.hostResolve(true));
+      this.hostResolve();
+    }
+    hostResolve(force) {
+      if (this.resolved || this.phase === 'lobby' || this.phase === 'over') return;
+      if (!(G.solo || G.net.role === 'host')) return;
+      if (this.fin.me === undefined || (this.fin.partner === undefined && !force)) return;
+      this.resolved = true;
+      const my = G.state.me.id, pi = G.state.partner.id, s = { dani: this.scores.dani, sebas: this.scores.sebas };
+      // pierde la ronda quien es encontrado PRIMERO (aunque al otro también lo encuentren después)
+      const pSeen = this.fin.partner === undefined ? this.pa.seen : !!this.fin.partner, ptRaw = this.fin.partner === undefined ? this.pa.seenT : this.fin.pt;
+      const mt = this.fin.me ? (this.fin.mt === undefined ? 0 : this.fin.mt) : Infinity, pt = pSeen ? (ptRaw === undefined ? 0 : ptRaw) : Infinity;
+      let meL = false, pL = false;
+      if (mt < Infinity || pt < Infinity) { if (mt < pt - 0.05) meL = true; else if (pt < mt - 0.05) pL = true; else meL = pL = true; }
+      if (!meL) s[my]++; if (!pL) s[pi]++;
+      const tn = { dani: this.tn.dani, sebas: this.tn.sebas }; tn[my] += this.fin.mn || 0; tn[pi] += this.fin.pn || 0;
+      const res = { r: this.r, seen: { [my]: meL, [pi]: pL }, scores: s, tn };
+      this.send('p_res', res); this.applyRes(res);
+    }
+    applyRes(res) {
+      this.scores = res.scores; this.tn = res.tn || this.tn; this.phase = 'between'; const my = G.state.me.id, pi = G.state.partner.id;
+      const iSeen = res.seen[my], pSeen = res.seen[pi];
+      this.me.mark.setText(iSeen ? '!' : '✔'); this.pa.mark.setText(pSeen ? '!' : '✔');
+      this.setBanner(iSeen && pSeen ? 'Los encontraron a la vez 🙈🙈 (nadie suma)' : iSeen ? (this.pa.seen ? 'Encontraron a los dos, pero a TI primero 🙈' : 'Te encontraron primero 🙈') : pSeen ? (this.me.seen ? 'Encontraron a los dos, pero a ' + G.state.partner.name + ' primero 😎 ¡sumas!' : 'Encontraron primero a ' + G.state.partner.name + ' 😎 ¡sumas!') : '¡Ni los vieron! 😎😎 (los dos suman)', this.scoreLine());
+      if (!(G.solo || G.net.role === 'host')) return;
+      this.time.delayedCall(3600, () => {
+        const sc = this.scores, tn = this.tn, tie = sc.dani === sc.sebas;
+        if (this.r >= this.rounds && (!tie || tn.dani !== tn.sebas)) { const w = !tie ? (sc.dani > sc.sebas ? 'dani' : 'sebas') : (tn.dani > tn.sebas ? 'dani' : 'sebas'); const o = { winner: w, scores: this.scores, tn, tieBreak: tie }; this.send('p_over', o); this.showOver(o); }
+        else { this.send('p_next', { r: this.r + 1 }); this.startRound(this.r + 1); }
+      });
+    }
+    scoreLine() { const s = this.scores, d = G.state.me.id === 'dani' ? G.state.me.name : G.state.partner.name, e = G.state.me.id === 'sebas' ? G.state.me.name : G.state.partner.name; return 'Rondas ganadas: ' + d + ' ' + s.dani + ' · ' + s.sebas + ' ' + e + '   📄 ' + this.tn.dani + ' - ' + this.tn.sebas; }
+
+    /* ---------- dibujo por cuadro ---------- */
+    render(time) {
+      this.noteHud.setText(['hide', 'patrol', 'between'].includes(this.phase) ? '📄 Apuntes: ' + (this.myN || 0) + '/4 (desempatan)' : '');
+      [this.me, this.pa].forEach(a => this.drawActor(a));
+      const g = this.coneG; g.clear(); let flag = null;
+      this.npcs.forEach(n => {
+        if (n.out) { if (n.spr) { n.spr.destroy(); n.spr = null; } return; }
+        if (!n.spr) { n.spr = this.add.sprite(n.x, n.y, 'npc_' + n.kind, 'd0').setOrigin(0.5, 1); n.shadow = this.add.ellipse(n.x, n.y, 14, 5, 0x000000, 0.25); }
+        const ca = Math.cos(n.a), sa = Math.sin(n.a), dir = Math.abs(ca) >= Math.abs(sa) ? 'l' : (sa < 0 ? 'u' : 'd'), fr = n.moving ? [1, 0, 2, 0][Math.floor(n.t * 7) % 4] : 0;
+        n.spr.setPosition(Math.round(n.x), Math.round(n.y)).setFrame(dir + fr).setFlipX(dir === 'l' && ca > 0).setDepth(n.y); n.shadow.setPosition(n.x, n.y - 1).setDepth(n.y - 1);
+        const col = n.kind === 'guard' ? 0xff4d4d : 0xffd24a, pts = [{ x: n.x, y: n.y - 12 }]; for (let k = 0; k <= 10; k++) { const an = n.a - n.half + (2 * n.half) * k / 10; pts.push({ x: n.x + Math.cos(an) * n.range, y: n.y - 12 + Math.sin(an) * n.range }); }
+        g.fillStyle(col, 0.2).fillPoints(pts, true).lineStyle(1, col, 0.55).strokePoints(pts, true);
+        if (n.kind === 'guard' && n.flag >= 0 && (n.state === 'walk' || n.state === 'peek')) flag = n;
+      });
+      if (flag) { const s = SPOTS[flag.flag]; this.flagTxt.setVisible(true).setPosition(s.x, s.y - META[s.t].flag + Math.sin(time / 120) * 2); } else this.flagTxt.setVisible(false);
+      this.eyes.forEach((e, i) => { const a = i ? this.pa : this.me; e.clear(); if (a.hid >= 0) { const s = SPOTS[a.hid], y = s.y - META[s.t].eye; e.fillStyle(0xffffff).fillRect(s.x - 4, y, 3, 3).fillRect(s.x + 1, y, 3, 3).fillStyle(0x1b1230).fillRect(s.x - 3, y + 1, 1, 2).fillRect(s.x + 2, y + 1, 1, 2); e.setDepth(s.y + 7); } });
+    }
+    drawActor(a) {
+      const flip = a.dir === 'r', dir = a.dir === 'r' ? 'l' : a.dir, fr = a.moving ? [1, 0, 2, 0][Math.floor(a.t / 130) % 4] : 0;
+      a.spr.setPosition(Math.round(a.x), Math.round(a.y)).setFrame(dir + fr).setFlipX(flip).setDepth(a.y); a.shadow.setPosition(a.x, a.y - 1).setDepth(a.y - 1).setVisible(a.hid < 0);
+      a.label.setPosition(Math.round(a.x), Math.round(a.y - (a.hid >= 0 ? 6 : 29))).setDepth(a.y + 1000).setAlpha(a.hid >= 0 ? 0.0 : 1);
+      a.mark.setPosition(a.x, a.y - 36).setDepth(a.y + 1001);
+      a.bar.clear().setDepth(a.y + 1001); if (a.meter > 0.02 && !a.seen) { a.bar.fillStyle(0x2b1b30).fillRect(a.x - 9, a.y - 34, 18, 4).fillStyle(a.meter > 0.66 ? 0xff3b3b : 0xffd24a).fillRect(a.x - 8, a.y - 33, 16 * Math.min(1, a.meter), 2); }
+    }
+
+    /* ---------- final ---------- */
+    showOver(o) {
+      if (this.phase === 'over') return; this.phase = 'over'; this.scores = o.scores; const D = 9500, my = G.state.me.id, pi = G.state.partner.id, win = o.winner, wn = win === my ? G.state.me.name : G.state.partner.name;
+      if (G.solo || G.net.role === 'host') { G.addSoles(win, PRIZE); G.recordWin('pucp', win, o.scores[win]); }
+      G.audio.sfx('win'); this.npcs.forEach(n => { n.out = true; });
+      const g = this.add.graphics().setDepth(D); g.fillStyle(0x2b1b30, 1).fillRoundedRect(50, 38, 300, 150, 8).lineStyle(2, 0xffd24a).strokeRoundedRect(50, 38, 300, 150, 8);
+      A.text(this, 200, 58, '🏆 ¡GANÓ ' + String(wn || '').toUpperCase() + '!', 18, '#ffd24a').setDepth(D + 1);
+      const nm = id => id === my ? G.state.me.name : G.state.partner.name;
+      [[my, 84], [pi, 102]].forEach(([id, y]) => this.add.text(200, y, nm(id) + ':  ' + o.scores[id] + ' rondas ganadas · 📄 ' + ((o.tn || {})[id] || 0) + (id === win ? '  👑' : ''), { fontFamily: 'VT323', fontSize: '15px', color: id === win ? '#ffd24a' : '#fff3d6' }).setOrigin(0.5).setDepth(D + 1));
+      this.add.text(200, 124, (o.tieBreak ? 'Desempate por apuntes 📄 · ' : '') + '+ S/ ' + PRIZE + ' para ' + nm(win) + ' · récord guardado', { fontFamily: 'VT323', fontSize: '13px', color: '#ffd1e0' }).setOrigin(0.5).setDepth(D + 1);
+      this.btn(o => o, 150, 160, 92, 22, '↻ Revancha', 0xffd24a, () => { this.send('p_again', {}); this.scene.restart(); }, D); this.btn(o => o, 250, 160, 92, 22, '◀ Al igloo', 0xff7aa8, () => G.flow.home(), D);
+      for (let i = 0; i < 14; i++) { const h = this.add.graphics().setDepth(D + 0.5); A.heart(h, 0, 0, 3 + (i % 3), [0xff5d97, 0xffd24a, 0x7fd1ae, 0xb07cff][i % 4]); h.x = 70 + Math.random() * 260; h.y = 30; this.tweens.add({ targets: h, y: 215, alpha: { from: 1, to: 0.2 }, duration: 1800 + Math.random() * 1400, delay: i * 90, repeat: -1 }); }
+    }
+  }
+  G.PucpScene = PucpScene;
+})();
